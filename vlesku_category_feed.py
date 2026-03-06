@@ -11,6 +11,7 @@ from bs4.element import Tag
 
 SITEMAP_URL = "https://www.vlesku.cz/sitemap-cz.xml"
 OUTPUT_CSV = "vlesku_category_feed.csv"
+BASE_URL = "https://www.vlesku.cz"
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (compatible; category-feed/1.0)"
@@ -81,6 +82,71 @@ def get_og_image(soup: BeautifulSoup) -> str:
     tag = soup.find("meta", attrs={"property": "og:image"})
     if tag and tag.get("content"):
         return tag["content"].strip()
+    return ""
+
+
+def is_ignored_image(url: str) -> bool:
+    if not url:
+        return True
+
+    ignored_patterns = [
+        "/img/logo-cz.png",
+        "logo-cz.png",
+        "logo",
+        "icon",
+        "facebook",
+        "instagram",
+    ]
+    lowered = url.lower()
+    return any(pattern in lowered for pattern in ignored_patterns)
+
+
+def absolutize_url(url: str, base: str = BASE_URL) -> str:
+    if not url:
+        return ""
+    if url.startswith("http://") or url.startswith("https://"):
+        return url
+    if url.startswith("//"):
+        return "https:" + url
+    if url.startswith("/"):
+        return base.rstrip("/") + url
+    return base.rstrip("/") + "/" + url.lstrip("/")
+
+
+def extract_first_product_image(soup: BeautifulSoup) -> str:
+    selectors = [
+        "#vypis li img",
+        "#vypis a img",
+        "ul#vypis img",
+        "#vypis source",
+    ]
+
+    for selector in selectors:
+        for el in soup.select(selector):
+            candidates = []
+            if el.name == "source":
+                candidates.extend([
+                    el.get("srcset"),
+                    el.get("data-srcset"),
+                ])
+            else:
+                candidates.extend([
+                    el.get("src"),
+                    el.get("data-src"),
+                    el.get("data-original"),
+                    el.get("data-lazy"),
+                    el.get("srcset"),
+                    el.get("data-srcset"),
+                ])
+
+            for candidate in candidates:
+                if not candidate:
+                    continue
+                first_url = candidate.split(",")[0].strip().split(" ")[0].strip()
+                full_url = absolutize_url(first_url)
+                if full_url and not is_ignored_image(full_url):
+                    return full_url
+
     return ""
 
 
@@ -159,15 +225,16 @@ def looks_like_product_page(soup: BeautifulSoup, url: str) -> bool:
 
 def extract_image_fallback(soup: BeautifulSoup) -> str:
     for img in soup.find_all("img"):
-        src = (img.get("src") or "").strip()
+        src = (img.get("src") or img.get("data-src") or "").strip()
         alt = (img.get("alt") or "").strip().lower()
         if not src:
             continue
-        if any(x in src.lower() for x in ["logo", "icon", "facebook", "instagram"]):
+        full_url = absolutize_url(src)
+        if is_ignored_image(full_url):
             continue
         if any(x in alt for x in ["logo", "facebook", "instagram"]):
             continue
-        return src
+        return full_url
     return ""
 
 
@@ -218,7 +285,11 @@ def scrape_category(url: str) -> Optional[dict]:
     if any(term in hierarchy for term in excluded_hierarchy_terms):
         return None
 
-    image_url = get_og_image(soup) or extract_image_fallback(soup)
+    og_image = absolutize_url(get_og_image(soup))
+    if is_ignored_image(og_image):
+        og_image = ""
+
+    image_url = extract_first_product_image(soup) or og_image or extract_image_fallback(soup)
 
     return {
         "identity": stable_identity(name, url),
