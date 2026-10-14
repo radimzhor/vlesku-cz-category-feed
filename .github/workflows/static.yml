@@ -56,3 +56,15 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+
+  # GitHub vypíná naplánované workflow po 60 dnech bez commitu.
+  # Opětovné povolení přes API odpočet vynuluje, takže se workflow samo nevypne.
+  keepalive:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Keep workflow enabled
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/static.yml/enable"
